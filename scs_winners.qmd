@@ -1,0 +1,177 @@
+---
+title: "SCS Winners"
+format: pdf
+editor: visual
+---
+
+```{r}
+#| echo: false
+library("tidyverse") 
+library("rvest")
+```
+
+```{r}
+# scrape from webpage
+page <- read_html("https://en.wikipedia.org/wiki/Supreme_Cat_Show")
+scs_table_raw <- page |> html_elements(".wikitable") |> html_table()
+scs_table_raw <- scs_table_raw[[1]]
+
+# start separating the Breed column into breed, sex, and coat (color/pattern)
+scs_winners <- scs_table_raw |> 
+  mutate(sex = str_extract(scs_table_raw$Breed, "male( [a-z]+)?|female( [a-z]+)?")) |>
+  mutate(sex = replace_na(sex, "unknown")) |>
+  mutate(Breed = str_remove_all(Breed, sex)) |>
+  mutate(breed = str_extract(scs_table_raw$Breed, scs_table_raw$Section)) |>
+  mutate(breed = replace_na(breed, "unknown")) |>
+  mutate(coat = str_remove_all(Breed, breed)) |>
+  mutate(coat = str_extract_all(Breed, "(Red|Brown|Chocolate|Seal|Auburn|Cream|Silver|Lilac|Blue|Black|White|Smoke|Tabby|Classic|Mackerel|Point|Shaded|Calico|Tortoiseshell|Tortie|&|and)"))
+
+# string operations turned my things into lists, I am undoing that
+for (i in 1:43) {
+  if (length(scs_winners$coat[[i]]) == 0)
+    scs_winners$coat[[i]] <- "unknown"
+  else if (length(scs_winners$coat[[i]] > 1))
+    scs_winners$coat[[i]] <- paste(scs_winners$coat[[i]], collapse = " ")
+}
+
+# further refining new columns
+scs_winners <- scs_winners |> 
+  mutate(coat = unlist(coat)) |>
+  mutate(Breed = str_remove_all(Breed, coat))
+
+# filling in the rest of the new breed column that was not filled using the information from the Section column earlier
+for (i in 1:43) {
+  if (scs_winners$breed[[i]] == "unknown")
+    scs_winners$breed[[i]] <- scs_winners$Breed[[i]]
+}
+
+# removing titles from Pedigree Name
+scs_winners <- scs_winners |>
+  select(-Breed) |>
+  rename(name = "Pedigree Name") |> 
+  mutate(name = str_remove_all(name, ",")) |>
+  mutate(name = str_replace_all(name, " and ", " & ")) |>
+  mutate(title = str_extract_all(name, "(Grand|Champion|UK|Imperial|Premier|Supreme|Olympian|Gold|Silver|Bronze|&)"))
+
+# fixing lists again
+for (i in 1:43) {
+  if (length(scs_winners$title[[i]]) == 0)
+    scs_winners$title[[i]] <- "none"
+  else if (length(scs_winners$title[[i]] > 1))
+    scs_winners$title[[i]] <- paste(scs_winners$title[[i]], collapse = " ")
+}
+
+# removing titles from names & separating names of owners when there are multiple
+scs_winners <- scs_winners |> 
+  mutate(title = unlist(title)) |>
+  mutate(name = str_remove_all(name, title)) |>
+  mutate(Owner = str_split(Owner, " & ")) |>
+  mutate(owner_1 = "none") |>
+  mutate(owner_2 = "none")
+
+# making sure owners names are complete
+for (i in 1:43) {
+  if (length(scs_winners$Owner[[i]]) == 1) {
+    scs_winners$owner_1[[i]] <- unlist(scs_winners$Owner[[i]])
+  }
+  else if (length(scs_winners$title[[i]] > 1)) {
+    scs_winners$owner_1[[i]] <- scs_winners$Owner[[i]][[1]]
+    scs_winners$owner_2[[i]] <- scs_winners$Owner[[i]][[2]]
+  }
+  if (scs_winners$owner_2[[i]] != "none" && str_detect(scs_winners$owner_1[[i]], " ") == FALSE) {
+    scs_winners$owner_1[[i]] <- paste(scs_winners$owner_1[[i]], str_remove(scs_winners$owner_2[[i]], "[a-zA-Z]+ "))
+  }
+}
+
+# same operations on Breeders as owners
+scs_winners <- scs_winners |>
+  mutate(Breeder = str_split(Breeder, " & ")) |>
+  mutate(breeder_1 = "placeholder") |>
+  mutate(breeder_2 = "placeholder")
+
+for (i in 1:43) {
+  if (length(scs_winners$Breeder[[i]]) == 1) {
+    scs_winners$breeder_1[[i]] <- unlist(scs_winners$Breeder[[i]])
+  }
+  else if (length(scs_winners$Breeder[[i]] > 1)) {
+    scs_winners$breeder_1[[i]] <- scs_winners$Breeder[[i]][[1]]
+    scs_winners$breeder_2[[i]] <- scs_winners$Breeder[[i]][[2]]
+  }
+  if (scs_winners$breeder_2[[i]] != "none" && str_detect(scs_winners$breeder_1[[i]], " ") == FALSE) {
+    scs_winners$breeder_1[[i]] <- paste(scs_winners$breeder_1[[i]], str_remove(scs_winners$breeder_2[[i]], "[a-zA-Z]+ "))
+  }
+}
+
+# removing old columns I'm done with & making a column for whether the breeder and owner are the same
+scs_winners <- scs_winners |>
+  select(-c(Breeder, Owner)) |>
+  mutate(breeder_owner_match = FALSE) 
+
+for (i in 1:43) {
+  if (scs_winners$owner_1[[i]] == scs_winners$breeder_1[[i]] || scs_winners$owner_2[[i]] == scs_winners$breeder_2[[i]] || scs_winners$owner_1[[i]] == scs_winners$breeder_2[[i]] || scs_winners$owner_2[[i]] == scs_winners$breeder_1[[i]]) {
+    scs_winners$breeder_owner_match[[i]] <- TRUE
+  }
+  if (scs_winners$breeder_2[[i]] == "placeholder") {
+    scs_winners$breeder_2[[i]] <- "none"
+  }
+}
+
+# section numbers for those that are already numbered
+scs_winners <- scs_winners |>
+  mutate(section = str_extract_all(Section, "[0-9]")) 
+
+# assigning numbers to those that are not
+for (i in 1:43) {
+  if (length(scs_winners$section[[i]]) == 0) {
+    if (scs_winners$Section[[i]] == "Persian") {
+      scs_winners$section[[i]] <- 1
+    }
+    else if (scs_winners$Section[[i]] == "Semi-Longhair") {
+      scs_winners$section[[i]] <- 2
+    }
+    else if (scs_winners$Section[[i]] == "British") {
+      scs_winners$section[[i]] <- 3
+    }
+    else if (scs_winners$Section[[i]] == "Foreign") {
+      scs_winners$section[[i]] <- 4
+    }
+    else if (scs_winners$Section[[i]] == "Burmese") {
+      scs_winners$section[[i]] <- 5
+    }
+    else if (scs_winners$Section[[i]] == "Oriental") {
+      scs_winners$section[[i]] <- 6
+    }
+    else if (scs_winners$Section[[i]] == "Siamese") {
+      scs_winners$section[[i]] <- 7
+    }
+  }
+  else if (length(scs_winners$coat[[i]] == 1))
+    scs_winners$section[[i]] <- unlist(scs_winners$section[[i]])
+}
+
+scs_winners <- scs_winners |>
+  mutate(section = unlist(section)) |>
+  select(-Section) |>
+  rename(year = Year) 
+
+# plots
+ggplot(scs_winners, mapping = aes(x = section)) + 
+  geom_bar() + 
+  labs(x = "Section", y = "Count", title = "Supreme Cat Show Winners by Section", subtitle = "1976-2026")
+scs_winners |> 
+  filter(str_detect(sex, "male|female")) |> 
+  ggplot(mapping = aes(x = sex)) + 
+  geom_bar() + 
+  labs(x = "Sex", y = "Count", title = "Supreme Cat Show Winners by Sex", subtitle = "1976-2026")
+scs_winners |> 
+  filter(str_detect(breed, "Persian")) |> 
+  arrange(year) |>
+  mutate(ccount = row_number()) |>
+  ggplot(mapping = aes(x = year, y = ccount)) +
+  geom_line() + 
+  labs(x = "Year", y = "Count", title = "Persian Winners of Supreme Cat Show Over Time", subtitle = "1976-2026")
+scs_winners |>
+  ggplot(mapping = aes(x = breeder_owner_match)) +
+  geom_bar() + 
+  labs(x = "Same Owner and Breeder", y = "Count", title = "Self-Bred Cats Winning Supreme Cat Show", subtitle = "1976-2026")
+```
